@@ -1,0 +1,140 @@
+sudo btrfs filesystem defragment -clzo /
+	recompress everything on mount /
+	
+sudo du -h / --max-depth=1 | sort -h
+	list big root directories
+	
+sudo compsize /usr /var /etc /home
+	compare compression stats
+	
+UUID=.... / btrfs degraded,noatime,nodiratime,subvol=@ 0 1
+	fstab to btrfs boot options
+	
+x11vnc -auth guess -forever -loop -noxdamage -repeat -rfbauth /home/aaron/.vnc/passwd -rfbport 5900 -shared
+	https://www.crazy-logic.co.uk/projects/computing/how-to-install-x11vnc-vnc-server-as-a-service-on-ubuntu-20-04-for-remote-access-or-screen-sharing
+
+User=aaron
+ExecStart=/usr/bin/x11vnc -auth guess -forever -loop -noxdamage -repeat -rfbauth /home/aaron/.vnc/passwd -rfbport 5900 -shared -display :0
+
+https://sites.google.com/a/gattis.org/know/Work-and-Tech/operating-systems-and-applications/unix/file-systems/btrfs-raid-boot
+
+https://linuxnatives.net/2016/perfect-btrfs-setup-for-a-server
+
+https://docs.google.com/presentation/d/145ic5zRTp78WJhaPzSpRqNldDCCFD6upfN2FE0GVke0/edit#slide=id.gb0f2d35328_0_0
+
+https://askubuntu.com/questions/675379/how-to-disable-the-password-prompts
+	disable sudo password
+
+sudo lvmdiskscan
+	show avaialble volumes
+sudo pvscan
+	
+/dev/sda6  [     908.20 GiB]
+	ProtectedDataSSD1
+/dev/sda5  [      12.00 GiB]
+	lvm cache
+/dev/sda7  [     825.79 GiB]
+	scratch data
+/dev/sdb1  [    <698.64 GiB]
+	ProtectedDataHHD1
+	
+sudo pvcreate /dev/sdb1
+sudo vgcreate HomeGroup /dev/sdb1 /dev/sda5
+sudo lvcreate -l 100%PVS -n ProtectedDataHHD1 HomeGroup /dev/sdb1
+sudo lvcreate -l 100%PVS -n ProtectedDataSSD1cacheHHD1 HomeGroup /dev/sda5	
+sudo lvconvert --type cache --cachemode writeback --cachevol ProtectedDataSSD1cacheHHD1 HomeGroup/ProtectedDataHHD1
+sudo lvconvert --uncache HomeGroup/ProtectedDataHHD1	
+
+UUID=.... / btrfs degraded,noatime,nodiratime,subvol=@ 0 1
+	Add mount data on boot with degraded
+
+sudo btrfs fi usage /
+sudo btrfs fi usage /media/aaron/ProtectedDataSSD1
+	show data ratio, metadata ratio
+
+sudo btrfs device add /dev/HomeGroup/ProtectedDataHHD1 /media/aaron/ProtectedDataSSD1
+	add HHD to SSD's protected storage
+
+sudo btrfs balance status /media/aaron/ProtectedDataSSD1
+	watch status of balance
+	
+sudo btrfs balance start --bg -mconvert=raid1,soft /media/aaron/ProtectedDataSSD1
+sudo btrfs balance start --bg -dconvert=raid1,soft /media/aaron/ProtectedDataSSD1
+	manually rebalance metadata, and data
+	
+sudo btrfs balance start -f -sconvert=single -mconvert=single -dconvert=single /media/aaron/ProtectedDataSSD1
+	remove redunancy
+sudo btrfs device delete /dev/mapper/HomeGroup-ProtectedDataHHD1 /media/aaron/ProtectedDataSSD1
+	remove HHD from array
+	
+
+BTRFS RAID1 filesystem, SSD+HHD no cache: 
+	read 200MB: 243 998kB/s
+	write 200MB: 81 333kB/s
+	read 4GB: (25 min test, not run)
+	write 4GB: (25 min test, not run)
+	WRITE: 121MB/s
+	READ: 539 MB/s
+	
+BTRFS RAID1 filesystem, SSD+HHD plus same SSD disk CACHE: 
+	read 200MB: IOPS=35.3k 145MB/s
+	write 200MB: IOPS=11.8k, BW=45.0MiB/s (48.2MB/s
+	read 4GB: IOPS=27.8k 114MB/s
+	write 4GB: IOPS=9294 38.1MB/s
+	WRITE: 260MB/s
+	READ: 503 MB/s
+
+BTRFS native filesystem, HHD plus SSH CACHE: 
+	read: IOPS=31.2k 128MB/s
+	write: IOPS=10.4k 42.7MB/s
+	WRITE: 540MB/s
+	READ: 512 MB/s
+
+BTRFS native filesystem, HHD no cache: 
+	read 200MB: IOPS=308 1.2MB/s
+	write 200MB: IOPS=102 422kB/s
+	WRITE: 96.4 MB/s
+	READ: 100 MB/s
+
+BTRFS native partition, compressed, SSD: 
+	read: IOPS=42.9k	176MB/s  
+	write: IOPS=14.3k 	58.7MB/s
+	READ: 543 MB/s
+	WRITE: 168 MB/s (not compressed, CPU 1 thread limited)
+	WRITE: 403 MB/s (compressable, CPU 1 thread limited)
+	
+EXT4 native partition, SSD: 
+	read: IOPS=58.6k 240MB/s
+	write: IOPS=19.6k 80.2MB/s
+EXT4 native partition, HHD: 
+	read: IOPS=133 137kB/s
+	write: IOPS=44 45.8kB/s
+EXT4 native partition, HHD plus SSH CACHE: 
+	read: IOPS=34.8k 35.6MB/s
+	write: IOPS=11.6k 11.9MB/s
+
+##########Tests##########
+
+WRITE: 4 thread test, BTRFS compression ruins it, best for SSD: 
+
+	sudo fio --name=randwrite --ioengine=libaio --iodepth=1 --rw=randwrite --bs=4k --direct=0 --size=512M --numjobs=4 --runtime=240 --group_reporting
+	
+WRITE: single thread ZEROs write test, BTRFS compression helps it, !!CPU limited!!:
+
+	dd if=/dev/zero of=testfile bs=1G count=1 oflag=direct
+	
+WRITE: single thread RANDOM write test, !!CPU limited!! but best for HHD:
+
+	dd if=/dev/urandom of=./randofile bs=1M count=1024 oflag=direct
+
+READ: single thread (requires above test file):
+
+	dd if=./randofile of=/dev/null bs=8k iflag=direct
+	
+IOPS: large test similar to a database
+
+	fio --randrepeat=1 --ioengine=libaio --direct=1 --gtod_reduce=1 --name=test --filename=test --bs=4k --iodepth=64 --size=4G --readwrite=randrw --rwmixread=75
+
+IOPS: small test similar to a database
+
+	fio --randrepeat=1 --ioengine=libaio --direct=1 --gtod_reduce=1 --name=test --filename=test --bs=4k --iodepth=64 --size=200M --readwrite=randrw --rwmixread=75
